@@ -1,0 +1,13 @@
+{
+  "name": "searcap-capture",
+  "version": "1.0.0",
+  "description": "Automated Naver search ad screenshots with Puppeteer and Firebase",
+  "main": "capture.js",
+  "scripts": {
+    "start": "node capture.js"
+  },
+  "dependencies": {
+    "puppeteer": "^20.9.0",
+    "firebase-admin": "^11.8.0"
+  }
+}
