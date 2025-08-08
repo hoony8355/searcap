@@ -65,13 +65,13 @@
 
       Object.keys(data).forEach(kw => {
         const kwDetails = document.createElement('details');
-        kwDetails.open = true;
+        kwDetails.open = false;
         kwDetails.innerHTML = `<summary>키워드: ${kw}</summary>`;
 
         Object.keys(data[kw]).forEach(vp => {
           const vpDetails = document.createElement('details');
           vpDetails.className = 'section';
-          vpDetails.open = true;
+          vpDetails.open = false;
           vpDetails.innerHTML = `<summary>${vp === 'pc' ? 'PC 버전' : '모바일 버전'}</summary>`;
 
           Object.keys(data[kw][vp]).forEach(sec => {
