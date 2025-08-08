@@ -4,7 +4,7 @@
 const puppeteer = require('puppeteer');
 const admin = require('firebase-admin');
 
-// Firebase Admin SDK 초기화
+// 1) Firebase Admin SDK 초기화
 const serviceAccount = JSON.parse(
   Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8')
 );
@@ -12,40 +12,27 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   projectId: process.env.FIREBASE_PROJECT_ID,
   storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  databaseURL: process.env.FIREBASE_DATABASE_URL,
+  databaseURL: process.env.FIREBASE_DATABASE_URL || undefined,
 });
 
 const bucket = admin.storage().bucket();
 const db = admin.firestore();
 
-// 섹션 컨테이너 찾기
-async function getSectionContainer(page, selector, text) {
-  let handle = selector ? await page.$(selector) : null;
-  if (!handle && text) {
-    const [heading] = await page.$x(`//*[contains(normalize-space(), '${text}')]`);
-    handle = heading;
-  }
-  if (!handle) return null;
+// 섹션별 XPath 셀렉터 (동적 ID 대응)
+const SECTION_XPATHS = {
+  'powerlink-pc': '//*[starts-with(@id, "pcPowerLink_")]/div/div',
+  'pricecompare-pc': '//*[@id="shp_gui_root"]/section/div[2]',
+  'powerlink-mobile': '//*[starts-with(@id, "mobilePowerLink_")]/section',
+  'pricecompare-mobile': '//*[@id="shp_tli_root"]',
+};
 
-  // 가장 가까운 section 요소 찾기
-  let container = await handle.evaluateHandle(el => el.closest('section'));
-  const containerJson = await container.jsonValue().catch(() => null);
-  if (!containerJson) {
-    container = await handle.evaluateHandle(el => {
-      let node = el;
-      while (node) {
-        if (node.querySelectorAll && node.querySelectorAll('a').length >= 3) {
-          return node;
-        }
-        node = node.parentElement;
-      }
-      return el;
-    });
-  }
-  return container;
+// 주어진 XPath를 이용해 요소 핸들 얻기
+async function getByXPath(page, xpath) {
+  const handles = await page.$x(xpath);
+  return handles[0] || null;
 }
 
-// 키워드+뷰포트별 캡처
+// 키워드 + 뷰포트별 캡처 함수
 async function captureKeyword(keyword, viewport) {
   const browser = await puppeteer.launch({
     headless: 'new',
@@ -53,6 +40,10 @@ async function captureKeyword(keyword, viewport) {
   });
   const page = await browser.newPage();
 
+  // 모바일 UA 설정 및 도메인 분기
+  const baseUrl = viewport.label === 'mobile'
+    ? 'https://m.search.naver.com/search.naver?query='
+    : 'https://search.naver.com/search.naver?query=';
   if (viewport.label === 'mobile') {
     await page.setUserAgent(
       'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) ' +
@@ -61,55 +52,55 @@ async function captureKeyword(keyword, viewport) {
   }
   await page.setViewport({ width: viewport.width, height: viewport.height });
 
-  const baseUrl =
-    viewport.label === 'mobile'
-      ? 'https://m.search.naver.com/search.naver?query='
-      : 'https://search.naver.com/search.naver?query=';
+  // 페이지 로드 및 대기
   await page.goto(baseUrl + encodeURIComponent(keyword), { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2000);
 
-  const ts = new Date().toISOString().replace(/[:.]/g, '');
+  const timestampLabel = new Date().toISOString().replace(/[:.]/g, '');
 
+  // 섹션 목록과 fullpage 정의
   const sections = [
-    { label: 'powerlink-pc',       selector: 'h2.title',                            text: '파워링크' },
-    { label: 'pricecompare-pc',    selector: 'h2.header-pc-module__title',          text: '네이버 가격비교' },
-    { label: 'powerlink-mobile',   selector: 'div.title_wrap > span.sub',          text: '관련 광고' },
-    { label: 'pricecompare-mobile',selector: 'h2.header-mobile-module__title',       text: '네이버 가격비교' },
-    { label: 'fullpage',           selector: null,                                 text: null },
+    'powerlink-pc',
+    'pricecompare-pc',
+    'powerlink-mobile',
+    'pricecompare-mobile',
+    'fullpage',
   ];
 
-  for (const sec of sections) {
+  for (const sectionKey of sections) {
     try {
-      if (sec.label === 'fullpage') {
-        const filePath = `${sec.label}_${viewport.label}_${keyword}_${ts}.png`;
-        const buffer = await page.screenshot({ fullPage: true });
-        await bucket.file(filePath).save(buffer, { contentType: 'image/png' });
-        const url = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
-        await db.collection('screenshots').add({
-          keyword, viewport: viewport.label, section: sec.label,
-          timestamp: admin.firestore.FieldValue.serverTimestamp(),
-          filePath, url,
-        });
-        continue;
+      let buffer, filePath;
+      if (sectionKey === 'fullpage') {
+        // 전체 페이지 캡처
+        buffer = await page.screenshot({ fullPage: true });
+        filePath = `${sectionKey}_${viewport.label}_${keyword}_${timestampLabel}.png`;
+      } else {
+        // XPath로 섹션 컨테이너 찾기
+        const xpath = SECTION_XPATHS[sectionKey];
+        const handle = await getByXPath(page, xpath);
+        if (!handle) {
+          console.warn(`❗섹션 미발견: ${sectionKey}`);
+          continue;
+        }
+        buffer = await handle.screenshot({ encoding: 'binary' });
+        filePath = `${sectionKey}_${viewport.label}_${keyword}_${timestampLabel}.png`;
       }
 
-      const container = await getSectionContainer(page, sec.selector, sec.text);
-      if (!container) {
-        console.warn(`❗ [${keyword}/${viewport.label}/${sec.label}] 섹션을 찾지 못했습니다.`);
-        continue;
-      }
-
-      const filePath = `${sec.label}_${viewport.label}_${keyword}_${ts}.png`;
-      const buffer = await container.screenshot({ encoding: 'binary' });
+      // Firebase Storage 업로드
       await bucket.file(filePath).save(buffer, { contentType: 'image/png' });
       const url = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+
+      // Firestore 메타데이터 기록
       await db.collection('screenshots').add({
-        keyword, viewport: viewport.label, section: sec.label,
+        keyword,
+        viewport: viewport.label,
+        section: sectionKey,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
-        filePath, url,
+        filePath,
+        url,
       });
     } catch (err) {
-      console.error(`❗ 에러 [${keyword}/${viewport.label}/${sec.label}]`, err);
+      console.error(`❗에러 [${sectionKey}/${viewport.label}/${keyword}]`, err);
     }
   }
 
@@ -118,7 +109,10 @@ async function captureKeyword(keyword, viewport) {
 
 // 실행 진입점
 (async () => {
-  const keywords = (process.env.KEYWORDS || '').split(',').map(k => k.trim()).filter(Boolean);
+  const keywords = (process.env.KEYWORDS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
   const viewports = [
     { label: 'pc',     width: 1366, height: 768 },
     { label: 'mobile', width: 375,  height: 667 },
