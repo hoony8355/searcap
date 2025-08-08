@@ -105,36 +105,51 @@ async function captureKeyword(keyword, viewport) {
         console.warn(`❗[${keyword}/${viewport.label}] 섹션 '${key}'을 찾지 못했습니다.`);
         continue;
       }
-      // Wait for content
+      // Wait for default content
       try {
         await page.waitForXPath(`${xpath}//a`, { timeout: 5000 });
       } catch {}
 
-      // Special handling for mobile price compare
+      // == Updated mobile pricecompare logic ==
       if (viewport.label === 'mobile' && key === 'pricecompare-mobile') {
+        // Scroll section into view
         await elem.evaluate(el => el.scrollIntoView({ block: 'center' }));
+        // Wait for text content to populate (up to 10s)
         try {
           await page.waitForFunction(
             el => el && el.innerText && el.innerText.trim().length > 50,
-            { timeout: 15000 },
+            { timeout: 10000 },
             elem
           );
         } catch {
           console.warn(`❗[${keyword}/mobile] pricecompare-mobile: 텍스트 로딩 대기 초과`);
         }
+        // Wait for images inside the section to load
+        await page.evaluate(async (el) => {
+          const imgs = Array.from(el.querySelectorAll('img'));
+          await Promise.all(
+            imgs.map(img =>
+              img.complete
+                ? Promise.resolve()
+                : new Promise(r => { img.onload = r; img.onerror = r; })
+            )
+          );
+        }, elem);
+        // Stability delay
+        await page.waitForTimeout(500);
       }
 
       const buf = await elem.screenshot({ encoding: 'binary' });
       const filePath = `${key}_${viewport.label}_${keyword}_${tsLabel}.png`;
       await bucket.file(filePath).save(buf, { contentType: 'image/png' });
-      const url = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+      const fileUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
       await db.collection('screenshots').add({
         keyword,
         viewport: viewport.label,
         section: key,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
         filePath,
-        url,
+        url: fileUrl,
       });
     } catch (err) {
       console.error(`❗에러 [${key}/${viewport.label}/${keyword}]`, err);
@@ -146,10 +161,12 @@ async function captureKeyword(keyword, viewport) {
     if (viewport.label === 'mobile') {
       await page.evaluate(async () => {
         const imgs = Array.from(document.images);
-        await Promise.all(imgs.map(img => img.complete || new Promise(r => {
-          img.addEventListener('load', r);
-          img.addEventListener('error', r);
-        })));
+        await Promise.all(
+          imgs.map(img => img.complete || new Promise(r => {
+            img.addEventListener('load', r);
+            img.addEventListener('error', r);
+          }))
+        );
       });
     }
     const fullBuf = await page.screenshot({ fullPage: true });
