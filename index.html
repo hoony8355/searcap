@@ -9,16 +9,19 @@
     h1 { margin-bottom: 1rem; }
     details { margin-bottom: 0.5rem; }
     summary { cursor: pointer; font-weight: bold; }
-    .section { margin-left: 1.5rem; }
-    .images { margin-left: 3rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
-    .images img { max-width: 200px; border: 1px solid #ccc; border-radius: 4px; }
-    .caption { font-size: 0.8rem; color: #666; text-align: center; }
+    .section { margin-left: 1rem; }
+    .image-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-left: 2rem; }
+    .image-grid img { max-width: 200px; border: 1px solid #ddd; border-radius: 4px; }
+    .caption { font-size: 0.8rem; color: #555; text-align: center; }
   </style>
-  <!-- Firebase SDK -->
+
+  <!-- Firebase JS SDK -->
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-storage-compat.js"></script>
+
   <script>
-    // Firebase 설정
+    // 사용자 제공 Firebase 설정
     const firebaseConfig = {
       apiKey: "AIzaSyDyT7U-wldhe_XB73_Fx2BbD0EhejrG8JA",
       authDomain: "searcap.firebaseapp.com",
@@ -28,9 +31,9 @@
       appId: "1:290217487279:web:95d4057be54210ab26dd5a",
       measurementId: "G-XCWHH8EBTT"
     };
-    // Firebase 초기화
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
+    const storage = firebase.storage();
   </script>
 </head>
 <body>
@@ -39,48 +42,57 @@
 
   <script>
     async function loadGallery() {
-      const gallery = document.getElementById('gallery');
-      gallery.textContent = '';
       const snapshot = await db.collection('screenshots').orderBy('timestamp', 'desc').get();
       const data = {};
       snapshot.forEach(doc => {
-        const { keyword, viewport, section, timestamp, url } = doc.data();
+        const { keyword, viewport, section, filePath, timestamp } = doc.data();
         data[keyword] = data[keyword] || {};
         data[keyword][viewport] = data[keyword][viewport] || {};
         data[keyword][viewport][section] = data[keyword][viewport][section] || [];
-        data[keyword][viewport][section].push({ url, timestamp: timestamp.toDate() });
+        data[keyword][viewport][section].push({ filePath, timestamp: timestamp.toDate() });
       });
 
-      for (const kw in data) {
-        const kDet = document.createElement('details'); kDet.open = true;
-        const kSum = document.createElement('summary'); kSum.textContent = kw;
-        kDet.appendChild(kSum);
-        for (const vp in data[kw]) {
-          const vDet = document.createElement('details'); vDet.className = 'section'; vDet.open = true;
-          const vSum = document.createElement('summary'); vSum.textContent = vp.toUpperCase();
-          vDet.appendChild(vSum);
-          for (const sec in data[kw][vp]) {
-            const sDet = document.createElement('details'); sDet.className = 'section';
-            const sSum = document.createElement('summary'); sSum.textContent = sec;
-            sDet.appendChild(sSum);
-            const imgDiv = document.createElement('div'); imgDiv.className = 'images';
+      const gallery = document.getElementById('gallery');
+      gallery.textContent = '';
+      for (const kw of Object.keys(data)) {
+        const kwDetails = document.createElement('details');
+        kwDetails.open = true;
+        kwDetails.innerHTML = `<summary>키워드: ${kw}</summary>`;
+        for (const vp of Object.keys(data[kw])) {
+          const vpDetails = document.createElement('details');
+          vpDetails.className = 'section';
+          vpDetails.innerHTML = `<summary>${vp === 'pc' ? 'PC 버전' : '모바일 버전'}</summary>`;
+          for (const sec of Object.keys(data[kw][vp])) {
+            const secDetails = document.createElement('details');
+            secDetails.className = 'section';
+            const label = sec === 'powerlink' ? '파워링크' : '가격비교/쇼핑정보';
+            secDetails.innerHTML = `<summary>${label}</summary>`;
+            const grid = document.createElement('div');
+            grid.className = 'image-grid';
             data[kw][vp][sec].forEach(item => {
-              const box = document.createElement('div');
-              const img = document.createElement('img'); img.src = item.url;
-              const cap = document.createElement('div'); cap.className = 'caption';
+              const wrapper = document.createElement('div');
+              const img = document.createElement('img');
+              // Storage에서 다운로드 URL 얻어오기
+              storage.ref(item.filePath)
+                .getDownloadURL()
+                .then(url => img.src = url)
+                .catch(console.error);
+              const cap = document.createElement('div');
+              cap.className = 'caption';
               cap.textContent = item.timestamp.toLocaleString();
-              box.appendChild(img); box.appendChild(cap);
-              imgDiv.appendChild(box);
+              wrapper.appendChild(img);
+              wrapper.appendChild(cap);
+              grid.appendChild(wrapper);
             });
-            sDet.appendChild(imgDiv);
-            vDet.appendChild(sDet);
+            secDetails.appendChild(grid);
+            vpDetails.appendChild(secDetails);
           }
-          kDet.appendChild(vDet);
+          kwDetails.appendChild(vpDetails);
         }
-        gallery.appendChild(kDet);
+        gallery.appendChild(kwDetails);
       }
     }
-    loadGallery();
+    window.addEventListener('DOMContentLoaded', loadGallery);
   </script>
 </body>
 </html>
