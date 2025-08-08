@@ -1,31 +1,31 @@
 name: Naver Search Ad Capture
 
 on:
-  # Schedule runs at 06:00, 12:00, 18:00 and 00:00 KST.  UTC offsets: 21, 3, 9, 15.
   schedule:
     - cron: '0 21,3,9,15 * * *'
-  # Allow manual execution from the GitHub UI
   workflow_dispatch:
 
 jobs:
   capture:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Check out repo
         uses: actions/checkout@v3
-      - name: Set up Node.js
+
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
+
       - name: Install dependencies
         run: npm ci
-        working-directory: searcap-capture
+
       - name: Run capture script
         run: node capture.js
-        working-directory: searcap-capture
         env:
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-          FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+          FIREBASE_PROJECT_ID:             ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_STORAGE_BUCKET:         ${{ secrets.FIREBASE_STORAGE_BUCKET }}
           FIREBASE_SERVICE_ACCOUNT_BASE64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 }}
-          FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
-          KEYWORDS: ${{ secrets.KEYWORDS }}
+          KEYWORDS:                        ${{ secrets.KEYWORDS }}
+          # 필요 시:
+          # FIREBASE_DATABASE_URL:         ${{ secrets.FIREBASE_DATABASE_URL }}
