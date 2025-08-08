@@ -1,30 +1,39 @@
 name: Naver Search Ad Capture
-
 on:
   schedule:
-    - cron: '0 21,3,9,15 * * *'  # UTC 21:00/03:00/09:00/15:00 → KST 06/12/18/00
+    - cron: '0 21,3,9,15 * * *'
   workflow_dispatch:
 
 jobs:
   capture:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repo
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
+
+      # ⭐ 한글 폰트 설치
+      - name: Install Korean fonts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qq fonts-noto-cjk fonts-noto-cjk-extra
 
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
+      - name: Cache npm
+        uses: actions/cache@v3
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --progress=false
 
       - name: Run capture script
         run: node capture.js
         env:
-          FIREBASE_PROJECT_ID:             ${{ secrets.FIREBASE_PROJECT_ID }}
-          FIREBASE_STORAGE_BUCKET:         ${{ secrets.FIREBASE_STORAGE_BUCKET }}
-          FIREBASE_SERVICE_ACCOUNT_BASE64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 }}
-          KEYWORDS:                        ${{ secrets.KEYWORDS }}
+          FIREBASE_PROJECT_ID:              ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_STORAGE_BUCKET:          ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+          FIREBASE_SERVICE_ACCOUNT_BASE64:  ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 }}
+          KEYWORDS:                         ${{ secrets.KEYWORDS }}
           # FIREBASE_DATABASE_URL:         ${{ secrets.FIREBASE_DATABASE_URL }}
