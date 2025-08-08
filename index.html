@@ -41,6 +41,14 @@
   <div id="gallery">로딩 중...</div>
 
   <script>
+    const sectionLabels = {
+      'powerlink-pc': 'PC 파워링크',
+      'pricecompare-pc': 'PC 가격비교',
+      'powerlink-mobile': '모바일 파워링크',
+      'pricecompare-mobile': '모바일 가격비교',
+      'fullpage': '전체 페이지'
+    };
+
     async function loadGallery() {
       const snapshot = await db.collection('screenshots').orderBy('timestamp', 'desc').get();
       const data = {};
@@ -54,45 +62,57 @@
 
       const gallery = document.getElementById('gallery');
       gallery.textContent = '';
-      for (const kw of Object.keys(data)) {
+
+      Object.keys(data).forEach(kw => {
         const kwDetails = document.createElement('details');
         kwDetails.open = true;
         kwDetails.innerHTML = `<summary>키워드: ${kw}</summary>`;
-        for (const vp of Object.keys(data[kw])) {
+
+        Object.keys(data[kw]).forEach(vp => {
           const vpDetails = document.createElement('details');
           vpDetails.className = 'section';
+          vpDetails.open = true;
           vpDetails.innerHTML = `<summary>${vp === 'pc' ? 'PC 버전' : '모바일 버전'}</summary>`;
-          for (const sec of Object.keys(data[kw][vp])) {
+
+          Object.keys(data[kw][vp]).forEach(sec => {
             const secDetails = document.createElement('details');
             secDetails.className = 'section';
-            const label = sec === 'powerlink' ? '파워링크' : '가격비교/쇼핑정보';
+            secDetails.open = false;
+            const label = sectionLabels[sec] || sec;
             secDetails.innerHTML = `<summary>${label}</summary>`;
+
             const grid = document.createElement('div');
             grid.className = 'image-grid';
+
             data[kw][vp][sec].forEach(item => {
               const wrapper = document.createElement('div');
               const img = document.createElement('img');
-              // Storage에서 다운로드 URL 얻어오기
               storage.ref(item.filePath)
                 .getDownloadURL()
-                .then(url => img.src = url)
+                .then(url => { img.src = url; })
                 .catch(console.error);
+
               const cap = document.createElement('div');
               cap.className = 'caption';
               cap.textContent = item.timestamp.toLocaleString();
+
               wrapper.appendChild(img);
               wrapper.appendChild(cap);
               grid.appendChild(wrapper);
             });
+
             secDetails.appendChild(grid);
             vpDetails.appendChild(secDetails);
-          }
+          });
+
           kwDetails.appendChild(vpDetails);
-        }
+        });
+
         gallery.appendChild(kwDetails);
-      }
+      });
     }
+
     window.addEventListener('DOMContentLoaded', loadGallery);
   </script>
 </body>
-</html>
+</html>```
