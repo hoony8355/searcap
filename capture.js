@@ -112,6 +112,8 @@ async function captureKeyword(keyword, viewport) {
 
       // == Updated mobile pricecompare logic ==
       if (viewport.label === 'mobile' && key === 'pricecompare-mobile') {
+        // Robust loading: wait 20s before capture
+        await page.waitForTimeout(20000);
         // Scroll section into view
         await elem.evaluate(el => el.scrollIntoView({ block: 'center' }));
         // Wait for text content to populate (up to 10s)
