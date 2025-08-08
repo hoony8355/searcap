@@ -1,12 +1,16 @@
-// capture.js
-// Puppeteer + Firebase를 이용한 네이버 검색 광고 스크린샷 및 전체 페이지 캡처 스크립트
+// Improved capture script for Naver search results
+// This version focuses on improving the mobile captures by ensuring that
+// dynamic modules are fully loaded before taking screenshots.
+// It also uses XPath patterns with starts-with to capture entire
+// advertisement sections that have dynamic IDs.
 
 const puppeteer = require('puppeteer');
 const admin = require('firebase-admin');
 
-// 1) Firebase Admin SDK 초기화
+// Initialise Firebase from environment variables. The service account
+// credentials are provided via FIREBASE_SERVICE_ACCOUNT_BASE64.
 const serviceAccount = JSON.parse(
-  Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8')
+  Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8'),
 );
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -14,110 +18,197 @@ admin.initializeApp({
   storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
   databaseURL: process.env.FIREBASE_DATABASE_URL || undefined,
 });
-
 const bucket = admin.storage().bucket();
 const db = admin.firestore();
 
-// 섹션별 XPath 셀렉터 (동적 ID 대응)
+// Define static XPath expressions for each section. Dynamic IDs are handled
+// using starts-with() so that the trailing random tokens do not matter.
 const SECTION_XPATHS = {
-  'powerlink-pc': '//*[starts-with(@id, "pcPowerLink_")]/div/div',
-  'pricecompare-pc': '//*[@id="shp_gui_root"]/section/div[2]',
-  'powerlink-mobile': '//*[starts-with(@id, "mobilePowerLink_")]/section',
-  'pricecompare-mobile': '//*[@id="shp_tli_root"]',
+  'powerlink-pc': "//*[starts-with(@id, 'pcPowerLink_')]/div/div",
+  'pricecompare-pc': "//*[@id='shp_gui_root']/section/div[2]",
+  'powerlink-mobile': "//*[starts-with(@id,'mobilePowerLink_')]/section",
+  'pricecompare-mobile': "//*[@id='shp_tli_root']",
 };
 
-// 주어진 XPath를 이용해 요소 핸들 얻기
-async function getByXPath(page, xpath) {
-  const handles = await page.$x(xpath);
-  return handles[0] || null;
+/**
+ * Returns the first element matching the given XPath. Optionally waits for
+ * at least one link inside the element to ensure the module has populated
+ * its content. If the element does not appear within the timeout, null
+ * is returned.
+ *
+ * @param {import('puppeteer').Page} page
+ * @param {string} xpath
+ * @param {number} timeout
+ */
+async function getElementByXPath(page, xpath, timeout = 5000) {
+  try {
+    // Wait for the element itself to appear
+    await page.waitForXPath(xpath, { timeout });
+  } catch {
+    return null;
+  }
+  const [elem] = await page.$x(xpath);
+  return elem || null;
 }
 
-// 키워드 + 뷰포트별 캡처 함수
+/**
+ * Ensures that dynamic modules on the mobile site have time to render. It
+ * waits for advertisement module headings to appear and scrolls down to
+ * trigger lazy loading of images and text, then back to the top. This
+ * prevents captures of blank or misaligned sections.
+ *
+ * @param {import('puppeteer').Page} page
+ */
+async function prepareMobilePage(page) {
+  // Wait for any of the relevant headings to appear
+  try {
+    await page.waitForXPath(
+      "//h2[contains(normalize-space(), '관련 광고') or contains(normalize-space(),'가격비교')]",
+      { timeout: 10000 },
+    );
+  } catch {
+    // continue even if headings do not appear within the timeout
+  }
+  // Scroll to the bottom to trigger lazy loading
+  await page.evaluate(async () => {
+    window.scrollTo(0, document.body.scrollHeight);
+    await new Promise((res) => setTimeout(res, 2000));
+    // Scroll back to top for consistent captures
+    window.scrollTo(0, 0);
+  });
+}
+
+/**
+ * Captures all sections and full page for a given keyword and viewport.
+ * Results are uploaded to Cloud Storage and metadata is recorded in
+ * Firestore.
+ *
+ * @param {string} keyword
+ * @param {{label: string, width: number, height: number}} viewport
+ */
 async function captureKeyword(keyword, viewport) {
   const browser = await puppeteer.launch({
     headless: 'new',
-    args: ['--no-sandbox'],
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+    ],
   });
   const page = await browser.newPage();
-
-  // 모바일 UA 설정 및 도메인 분기
-  const baseUrl = viewport.label === 'mobile'
-    ? 'https://m.search.naver.com/search.naver?query='
-    : 'https://search.naver.com/search.naver?query=';
+  // Set viewport and user-agent
+  await page.setViewport({ width: viewport.width, height: viewport.height });
   if (viewport.label === 'mobile') {
     await page.setUserAgent(
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) ' +
-      'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1'
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) '
+      + 'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
     );
   }
-  await page.setViewport({ width: viewport.width, height: viewport.height });
-
-  // 페이지 로드 및 대기
-  await page.goto(baseUrl + encodeURIComponent(keyword), { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(2000);
-
-  const timestampLabel = new Date().toISOString().replace(/[:.]/g, '');
-
-  // 섹션 목록과 fullpage 정의
-  const sections = [
+  // Construct URL using mobile domain when needed
+  const base =
+    viewport.label === 'mobile'
+      ? 'https://m.search.naver.com/search.naver?query='
+      : 'https://search.naver.com/search.naver?query=';
+  const url = `${base}${encodeURIComponent(keyword)}`;
+  // Navigate and wait for initial DOM
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  // Additional waits for mobile pages
+  if (viewport.label === 'mobile') {
+    await prepareMobilePage(page);
+  } else {
+    // PC: short static delay to allow modules to populate
+    await page.waitForTimeout(2000);
+  }
+  // Timestamp label for filenames
+  const tsLabel = new Date().toISOString().replace(/[:.]/g, '');
+  // List of section keys to capture plus fullpage
+  const sectionKeys = [
     'powerlink-pc',
     'pricecompare-pc',
     'powerlink-mobile',
     'pricecompare-mobile',
-    'fullpage',
   ];
-
-  for (const sectionKey of sections) {
+  for (const key of sectionKeys) {
+    // Skip irrelevant keys for this viewport
+    if (viewport.label === 'pc' && key.includes('mobile')) continue;
+    if (viewport.label === 'mobile' && key.includes('pc')) continue;
+    const xpath = SECTION_XPATHS[key];
+    if (!xpath) continue;
     try {
-      let buffer, filePath;
-      if (sectionKey === 'fullpage') {
-        // 전체 페이지 캡처
-        buffer = await page.screenshot({ fullPage: true });
-        filePath = `${sectionKey}_${viewport.label}_${keyword}_${timestampLabel}.png`;
-      } else {
-        // XPath로 섹션 컨테이너 찾기
-        const xpath = SECTION_XPATHS[sectionKey];
-        const handle = await getByXPath(page, xpath);
-        if (!handle) {
-          console.warn(`❗섹션 미발견: ${sectionKey}`);
-          continue;
-        }
-        buffer = await handle.screenshot({ encoding: 'binary' });
-        filePath = `${sectionKey}_${viewport.label}_${keyword}_${timestampLabel}.png`;
+      const elem = await getElementByXPath(page, xpath, 7000);
+      if (!elem) {
+        console.warn(`[${keyword}/${viewport.label}] 섹션 '${key}'을 찾지 못했습니다.`);
+        continue;
       }
-
-      // Firebase Storage 업로드
-      await bucket.file(filePath).save(buffer, { contentType: 'image/png' });
+      // Ensure the content inside has had time to load by waiting for links or images
+      try {
+        await page.waitForXPath(`${xpath}//a`, { timeout: 5000 });
+      } catch {
+        // continue even if links are not found
+      }
+      const buf = await elem.screenshot({ encoding: 'binary' });
+      const filePath = `${key}_${viewport.label}_${keyword}_${tsLabel}.png`;
+      await bucket.file(filePath).save(buf, { contentType: 'image/png' });
       const url = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
-
-      // Firestore 메타데이터 기록
       await db.collection('screenshots').add({
         keyword,
         viewport: viewport.label,
-        section: sectionKey,
+        section: key,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
         filePath,
         url,
       });
     } catch (err) {
-      console.error(`❗에러 [${sectionKey}/${viewport.label}/${keyword}]`, err);
+      console.error(`❗ 에러 [${key}/${viewport.label}/${keyword}]`, err);
     }
   }
-
+  // Capture full page (always)
+  try {
+    // For mobile, wait for images to finish loading to avoid blank placeholders
+    if (viewport.label === 'mobile') {
+      await page.evaluate(async () => {
+        const images = Array.from(document.images);
+        await Promise.all(
+          images.map(
+            (img) =>
+              img.complete ||
+              new Promise((resolve) => {
+                img.addEventListener('load', resolve);
+                img.addEventListener('error', resolve);
+              }),
+          ),
+        );
+      });
+    }
+    const full = await page.screenshot({ fullPage: true });
+    const fullPath = `fullpage_${viewport.label}_${keyword}_${tsLabel}.png`;
+    await bucket.file(fullPath).save(full, { contentType: 'image/png' });
+    const fullUrl = `https://storage.googleapis.com/${bucket.name}/${fullPath}`;
+    await db.collection('screenshots').add({
+      keyword,
+      viewport: viewport.label,
+      section: 'fullpage',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      filePath: fullPath,
+      url: fullUrl,
+    });
+  } catch (err) {
+    console.error(`❗ 에러 [fullpage/${viewport.label}/${keyword}]`, err);
+  }
   await browser.close();
 }
 
-// 실행 진입점
-(async () => {
-  const keywords = (process.env.KEYWORDS || '')
+// Entry point: read keywords from KEYWORDS env and iterate over viewports
+;(async () => {
+  const keywordsEnv = process.env.KEYWORDS || '';
+  const keywords = keywordsEnv
     .split(',')
-    .map(s => s.trim())
+    .map((s) => s.trim())
     .filter(Boolean);
   const viewports = [
-    { label: 'pc',     width: 1366, height: 768 },
-    { label: 'mobile', width: 375,  height: 667 },
+    { label: 'pc', width: 1366, height: 768 },
+    { label: 'mobile', width: 375, height: 667 },
   ];
-
   for (const kw of keywords) {
     for (const vp of viewports) {
       await captureKeyword(kw, vp);
