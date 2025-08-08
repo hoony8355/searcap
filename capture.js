@@ -4,8 +4,7 @@
 const puppeteer = require('puppeteer');
 const admin = require('firebase-admin');
 
-// Initialise Firebase from environment variables. The service account
-// credentials are provided via FIREBASE_SERVICE_ACCOUNT_BASE64.
+// Firebase Admin SDK 초기화
 const serviceAccount = JSON.parse(
   Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8')
 );
@@ -18,16 +17,15 @@ admin.initializeApp({
 const bucket = admin.storage().bucket();
 const db = admin.firestore();
 
-// Define static XPath expressions for each section. Dynamic IDs are handled
-// using starts-with() so trailing tokens do not matter.
+// 섹션 XPath 정의 (동적 ID 지원)
 const SECTION_XPATHS = {
-  'powerlink-pc':       "//*[starts-with(@id, 'pcPowerLink_')]/div/div",
-  'pricecompare-pc':    "//*[@id='shp_gui_root']/section/div[2]",
-  'powerlink-mobile':   "//*[starts-with(@id,'mobilePowerLink_')]/section",
-  'pricecompare-mobile':"//*[@id='shp_tli_root']",
+  'powerlink-pc': "//*[starts-with(@id, 'pcPowerLink_')]/div/div",
+  'pricecompare-pc': "//*[@id='shp_gui_root']/section/div[2]",
+  'powerlink-mobile': "//*[starts-with(@id,'mobilePowerLink_')]/section",
+  'pricecompare-mobile': "//*[@id='shp_tli_root']",
 };
 
-// Returns the first element matching the given XPath, or null if timeout.
+// XPath로 요소 가져오기
 async function getElementByXPath(page, xpath, timeout = 5000) {
   try {
     await page.waitForXPath(xpath, { timeout });
@@ -38,22 +36,22 @@ async function getElementByXPath(page, xpath, timeout = 5000) {
   return elem || null;
 }
 
-// Prepares mobile page by waiting headings and triggering lazy-load.
+// 모바일 페이지 준비: 헤딩 대기 + lazy-load 트리거
 async function prepareMobilePage(page) {
   try {
     await page.waitForXPath(
       "//h2[contains(normalize-space(), '관련 광고') or contains(normalize-space(),'가격비교')]",
-      { timeout: 10000 },
+      { timeout: 10000 }
     );
   } catch {}
   await page.evaluate(async () => {
     window.scrollTo(0, document.body.scrollHeight);
-    await new Promise(res => setTimeout(res, 2000));
+    await new Promise(r => setTimeout(r, 2000));
     window.scrollTo(0, 0);
   });
 }
 
-// Captures sections and full page for a keyword and viewport.
+// 키워드+뷰포트별 캡처
 async function captureKeyword(keyword, viewport) {
   const browser = await puppeteer.launch({
     headless: 'new',
@@ -74,19 +72,16 @@ async function captureKeyword(keyword, viewport) {
       : 'https://search.naver.com/search.naver?query=';
   const url = baseUrl + encodeURIComponent(keyword);
 
-  // Navigate and wait
+  // 페이지 열고 초기 대기
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-  // Additional waits
   if (viewport.label === 'mobile') {
     await prepareMobilePage(page);
-    // Extra stabilization
     await page.waitForTimeout(5000);
   } else {
     await page.waitForTimeout(2000);
   }
 
-  const tsLabel = new Date().toISOString().replace(/[:.]/g, '');
+  const ts = new Date().toISOString().replace(/[:.]/g, '');
   const sectionKeys = [
     'powerlink-pc',
     'pricecompare-pc',
@@ -102,21 +97,17 @@ async function captureKeyword(keyword, viewport) {
     try {
       const elem = await getElementByXPath(page, xpath, 7000);
       if (!elem) {
-        console.warn(`❗[${keyword}/${viewport.label}] 섹션 '${key}'을 찾지 못했습니다.`);
+        console.warn(`❗ [${keyword}/${viewport.label}] 섹션 '${key}' 미발견`);
         continue;
       }
-      // Wait for default content
-      try {
-        await page.waitForXPath(`${xpath}//a`, { timeout: 5000 });
-      } catch {}
 
-      // == Updated mobile pricecompare logic ==
+      // 모바일 가격비교 섹션: 로딩 검증
       if (viewport.label === 'mobile' && key === 'pricecompare-mobile') {
-        // Robust loading: wait 20s before capture
-        await page.waitForTimeout(20000);
-        // Scroll section into view
+        // 화면 중앙으로 이동
         await elem.evaluate(el => el.scrollIntoView({ block: 'center' }));
-        // Wait for text content to populate (up to 10s)
+        // 충분히 대기 (최대 20초)
+        await page.waitForTimeout(20000);
+        // 텍스트 로딩 완료 대기
         try {
           await page.waitForFunction(
             el => el && el.innerText && el.innerText.trim().length > 50,
@@ -124,10 +115,10 @@ async function captureKeyword(keyword, viewport) {
             elem
           );
         } catch {
-          console.warn(`❗[${keyword}/mobile] pricecompare-mobile: 텍스트 로딩 대기 초과`);
+          console.warn(`❗ [${keyword}/mobile] pricecompare-mobile: 텍스트 로딩 대기 초과`);
         }
-        // Wait for images inside the section to load
-        await page.evaluate(async (el) => {
+        // 이미지 로딩 완료 대기
+        await page.evaluate(async el => {
           const imgs = Array.from(el.querySelectorAll('img'));
           await Promise.all(
             imgs.map(img =>
@@ -137,42 +128,43 @@ async function captureKeyword(keyword, viewport) {
             )
           );
         }, elem);
-        // Stability delay
         await page.waitForTimeout(500);
       }
 
+      // 스크린샷 저장
       const buf = await elem.screenshot({ encoding: 'binary' });
-      const filePath = `${key}_${viewport.label}_${keyword}_${tsLabel}.png`;
+      const filePath = `${key}_${viewport.label}_${keyword}_${ts}.png`;
       await bucket.file(filePath).save(buf, { contentType: 'image/png' });
-      const fileUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+      const publicUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
       await db.collection('screenshots').add({
         keyword,
         viewport: viewport.label,
         section: key,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
         filePath,
-        url: fileUrl,
+        url: publicUrl,
       });
     } catch (err) {
-      console.error(`❗에러 [${key}/${viewport.label}/${keyword}]`, err);
+      console.error(`❗ 에러 [${key}/${viewport.label}/${keyword}]`, err);
     }
   }
 
-  // Full page capture
+  // 전체 페이지 캡처
   try {
     if (viewport.label === 'mobile') {
       await page.evaluate(async () => {
         const imgs = Array.from(document.images);
         await Promise.all(
-          imgs.map(img => img.complete || new Promise(r => {
-            img.addEventListener('load', r);
-            img.addEventListener('error', r);
-          }))
+          imgs.map(img =>
+            img.complete
+              ? Promise.resolve()
+              : new Promise(r => { img.onload = r; img.onerror = r; })
+          )
         );
       });
     }
     const fullBuf = await page.screenshot({ fullPage: true });
-    const fullPath = `fullpage_${viewport.label}_${keyword}_${tsLabel}.png`;
+    const fullPath = `fullpage_${viewport.label}_${keyword}_${ts}.png`;
     await bucket.file(fullPath).save(fullBuf, { contentType: 'image/png' });
     const fullUrl = `https://storage.googleapis.com/${bucket.name}/${fullPath}`;
     await db.collection('screenshots').add({
@@ -184,13 +176,12 @@ async function captureKeyword(keyword, viewport) {
       url: fullUrl,
     });
   } catch (err) {
-    console.error(`❗에러 [fullpage/${viewport.label}/${keyword}]`, err);
+    console.error(`❗ 에러 [fullpage/${viewport.label}/${keyword}]`, err);
   }
 
   await browser.close();
 }
 
-// Entry point
 (async () => {
   const keywords = (process.env.KEYWORDS || '')
     .split(',')
