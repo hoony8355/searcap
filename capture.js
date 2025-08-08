@@ -146,6 +146,24 @@ async function captureKeyword(keyword, viewport) {
       } catch {
         // continue even if links are not found
       }
+
+      // For mobile price comparison, scroll the element into view and wait
+      if (viewport.label === 'mobile' && key === 'pricecompare-mobile') {
+        // Bring the element into the center of the viewport to trigger lazy layouting
+        await elem.evaluate(el => {
+          el.scrollIntoView({ behavior: 'auto', block: 'center' });
+        });
+        // Wait a bit longer for the text to render inside the container
+        try {
+          await page.waitForFunction(
+            el => el && el.innerText && el.innerText.trim().length > 50,
+            { timeout: 7000 },
+            elem,
+          );
+        } catch {
+          // Even if text doesn't meet criteria, proceed
+        }
+      }
       const buf = await elem.screenshot({ encoding: 'binary' });
       const filePath = `${key}_${viewport.label}_${keyword}_${tsLabel}.png`;
       await bucket.file(filePath).save(buf, { contentType: 'image/png' });
