@@ -1,8 +1,5 @@
-// Improved capture script for Naver search results
-// This version focuses on improving the mobile captures by ensuring that
-// dynamic modules are fully loaded before taking screenshots.
-// It also uses XPath patterns with starts-with to capture entire
-// advertisement sections that have dynamic IDs.
+// capture.js
+// Puppeteer + Firebase를 이용한 네이버 검색 광고 스크린샷 및 전체 페이지 캡처 스크립트
 
 const puppeteer = require('puppeteer');
 const admin = require('firebase-admin');
@@ -10,7 +7,7 @@ const admin = require('firebase-admin');
 // Initialise Firebase from environment variables. The service account
 // credentials are provided via FIREBASE_SERVICE_ACCOUNT_BASE64.
 const serviceAccount = JSON.parse(
-  Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8'),
+  Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8')
 );
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -22,27 +19,17 @@ const bucket = admin.storage().bucket();
 const db = admin.firestore();
 
 // Define static XPath expressions for each section. Dynamic IDs are handled
-// using starts-with() so that the trailing random tokens do not matter.
+// using starts-with() so trailing tokens do not matter.
 const SECTION_XPATHS = {
-  'powerlink-pc': "//*[starts-with(@id, 'pcPowerLink_')]/div/div",
-  'pricecompare-pc': "//*[@id='shp_gui_root']/section/div[2]",
-  'powerlink-mobile': "//*[starts-with(@id,'mobilePowerLink_')]/section",
-  'pricecompare-mobile': "//*[@id='shp_tli_root']",
+  'powerlink-pc':       "//*[starts-with(@id, 'pcPowerLink_')]/div/div",
+  'pricecompare-pc':    "//*[@id='shp_gui_root']/section/div[2]",
+  'powerlink-mobile':   "//*[starts-with(@id,'mobilePowerLink_')]/section",
+  'pricecompare-mobile':"//*[@id='shp_tli_root']",
 };
 
-/**
- * Returns the first element matching the given XPath. Optionally waits for
- * at least one link inside the element to ensure the module has populated
- * its content. If the element does not appear within the timeout, null
- * is returned.
- *
- * @param {import('puppeteer').Page} page
- * @param {string} xpath
- * @param {number} timeout
- */
+// Returns the first element matching the given XPath, or null if timeout.
 async function getElementByXPath(page, xpath, timeout = 5000) {
   try {
-    // Wait for the element itself to appear
     await page.waitForXPath(xpath, { timeout });
   } catch {
     return null;
@@ -51,85 +38,63 @@ async function getElementByXPath(page, xpath, timeout = 5000) {
   return elem || null;
 }
 
-/**
- * Ensures that dynamic modules on the mobile site have time to render. It
- * waits for advertisement module headings to appear and scrolls down to
- * trigger lazy loading of images and text, then back to the top. This
- * prevents captures of blank or misaligned sections.
- *
- * @param {import('puppeteer').Page} page
- */
+// Prepares mobile page by waiting headings and triggering lazy-load.
 async function prepareMobilePage(page) {
-  // Wait for any of the relevant headings to appear
   try {
     await page.waitForXPath(
       "//h2[contains(normalize-space(), '관련 광고') or contains(normalize-space(),'가격비교')]",
       { timeout: 10000 },
     );
-  } catch {
-    // continue even if headings do not appear within the timeout
-  }
-  // Scroll to the bottom to trigger lazy loading
+  } catch {}
   await page.evaluate(async () => {
     window.scrollTo(0, document.body.scrollHeight);
-    await new Promise((res) => setTimeout(res, 2000));
-    // Scroll back to top for consistent captures
+    await new Promise(res => setTimeout(res, 2000));
     window.scrollTo(0, 0);
   });
 }
 
-/**
- * Captures all sections and full page for a given keyword and viewport.
- * Results are uploaded to Cloud Storage and metadata is recorded in
- * Firestore.
- *
- * @param {string} keyword
- * @param {{label: string, width: number, height: number}} viewport
- */
+// Captures sections and full page for a keyword and viewport.
 async function captureKeyword(keyword, viewport) {
   const browser = await puppeteer.launch({
     headless: 'new',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-    ],
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
   });
   const page = await browser.newPage();
-  // Set viewport and user-agent
   await page.setViewport({ width: viewport.width, height: viewport.height });
   if (viewport.label === 'mobile') {
     await page.setUserAgent(
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) '
-      + 'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) ' +
+      'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1'
     );
   }
-  // Construct URL using mobile domain when needed
-  const base =
+
+  const baseUrl =
     viewport.label === 'mobile'
       ? 'https://m.search.naver.com/search.naver?query='
       : 'https://search.naver.com/search.naver?query=';
-  const url = `${base}${encodeURIComponent(keyword)}`;
-  // Navigate and wait for initial DOM
+  const url = baseUrl + encodeURIComponent(keyword);
+
+  // Navigate and wait
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  // Additional waits for mobile pages
+
+  // Additional waits
   if (viewport.label === 'mobile') {
     await prepareMobilePage(page);
+    // Extra stabilization
+    await page.waitForTimeout(5000);
   } else {
-    // PC: short static delay to allow modules to populate
     await page.waitForTimeout(2000);
   }
-  // Timestamp label for filenames
+
   const tsLabel = new Date().toISOString().replace(/[:.]/g, '');
-  // List of section keys to capture plus fullpage
   const sectionKeys = [
     'powerlink-pc',
     'pricecompare-pc',
     'powerlink-mobile',
     'pricecompare-mobile',
   ];
+
   for (const key of sectionKeys) {
-    // Skip irrelevant keys for this viewport
     if (viewport.label === 'pc' && key.includes('mobile')) continue;
     if (viewport.label === 'mobile' && key.includes('pc')) continue;
     const xpath = SECTION_XPATHS[key];
@@ -137,33 +102,28 @@ async function captureKeyword(keyword, viewport) {
     try {
       const elem = await getElementByXPath(page, xpath, 7000);
       if (!elem) {
-        console.warn(`[${keyword}/${viewport.label}] 섹션 '${key}'을 찾지 못했습니다.`);
+        console.warn(`❗[${keyword}/${viewport.label}] 섹션 '${key}'을 찾지 못했습니다.`);
         continue;
       }
-      // Ensure the content inside has had time to load by waiting for links or images
+      // Wait for content
       try {
         await page.waitForXPath(`${xpath}//a`, { timeout: 5000 });
-      } catch {
-        // continue even if links are not found
-      }
+      } catch {}
 
-      // For mobile price comparison, scroll the element into view and wait
+      // Special handling for mobile price compare
       if (viewport.label === 'mobile' && key === 'pricecompare-mobile') {
-        // Bring the element into the center of the viewport to trigger lazy layouting
-        await elem.evaluate(el => {
-          el.scrollIntoView({ behavior: 'auto', block: 'center' });
-        });
-        // Wait a bit longer for the text to render inside the container
+        await elem.evaluate(el => el.scrollIntoView({ block: 'center' }));
         try {
           await page.waitForFunction(
             el => el && el.innerText && el.innerText.trim().length > 50,
-            { timeout: 7000 },
-            elem,
+            { timeout: 15000 },
+            elem
           );
         } catch {
-          // Even if text doesn't meet criteria, proceed
+          console.warn(`❗[${keyword}/mobile] pricecompare-mobile: 텍스트 로딩 대기 초과`);
         }
       }
+
       const buf = await elem.screenshot({ encoding: 'binary' });
       const filePath = `${key}_${viewport.label}_${keyword}_${tsLabel}.png`;
       await bucket.file(filePath).save(buf, { contentType: 'image/png' });
@@ -177,30 +137,24 @@ async function captureKeyword(keyword, viewport) {
         url,
       });
     } catch (err) {
-      console.error(`❗ 에러 [${key}/${viewport.label}/${keyword}]`, err);
+      console.error(`❗에러 [${key}/${viewport.label}/${keyword}]`, err);
     }
   }
-  // Capture full page (always)
+
+  // Full page capture
   try {
-    // For mobile, wait for images to finish loading to avoid blank placeholders
     if (viewport.label === 'mobile') {
       await page.evaluate(async () => {
-        const images = Array.from(document.images);
-        await Promise.all(
-          images.map(
-            (img) =>
-              img.complete ||
-              new Promise((resolve) => {
-                img.addEventListener('load', resolve);
-                img.addEventListener('error', resolve);
-              }),
-          ),
-        );
+        const imgs = Array.from(document.images);
+        await Promise.all(imgs.map(img => img.complete || new Promise(r => {
+          img.addEventListener('load', r);
+          img.addEventListener('error', r);
+        })));
       });
     }
-    const full = await page.screenshot({ fullPage: true });
+    const fullBuf = await page.screenshot({ fullPage: true });
     const fullPath = `fullpage_${viewport.label}_${keyword}_${tsLabel}.png`;
-    await bucket.file(fullPath).save(full, { contentType: 'image/png' });
+    await bucket.file(fullPath).save(fullBuf, { contentType: 'image/png' });
     const fullUrl = `https://storage.googleapis.com/${bucket.name}/${fullPath}`;
     await db.collection('screenshots').add({
       keyword,
@@ -211,17 +165,17 @@ async function captureKeyword(keyword, viewport) {
       url: fullUrl,
     });
   } catch (err) {
-    console.error(`❗ 에러 [fullpage/${viewport.label}/${keyword}]`, err);
+    console.error(`❗에러 [fullpage/${viewport.label}/${keyword}]`, err);
   }
+
   await browser.close();
 }
 
-// Entry point: read keywords from KEYWORDS env and iterate over viewports
-;(async () => {
-  const keywordsEnv = process.env.KEYWORDS || '';
-  const keywords = keywordsEnv
+// Entry point
+(async () => {
+  const keywords = (process.env.KEYWORDS || '')
     .split(',')
-    .map((s) => s.trim())
+    .map(s => s.trim())
     .filter(Boolean);
   const viewports = [
     { label: 'pc', width: 1366, height: 768 },
