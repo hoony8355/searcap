@@ -1,25 +1,30 @@
- jobs:
-   capture:
-     runs-on: ubuntu-latest
-     steps:
-       - name: Check out repo
-         uses: actions/checkout@v3
+name: Naver Search Ad Capture
 
-       - name: Setup Node.js
-         uses: actions/setup-node@v3
-         with:
-           node-version: '18'
+on:
+  schedule:
+    - cron: '0 21,3,9,15 * * *'  # UTC 21:00/03:00/09:00/15:00 → KST 06/12/18/00
+  workflow_dispatch:
 
--      - name: Install dependencies
--        run: npm ci
-+      - name: Install dependencies
-+        run: npm install
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v3
 
-       - name: Run capture script
-         run: node capture.js
-         env:
-           FIREBASE_PROJECT_ID:             ${{ secrets.FIREBASE_PROJECT_ID }}
-           FIREBASE_STORAGE_BUCKET:         ${{ secrets.FIREBASE_STORAGE_BUCKET }}
-           FIREBASE_SERVICE_ACCOUNT_BASE64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 }}
-           KEYWORDS:                        ${{ secrets.KEYWORDS }}
-           # FIREBASE_DATABASE_URL:         ${{ secrets.FIREBASE_DATABASE_URL }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run capture script
+        run: node capture.js
+        env:
+          FIREBASE_PROJECT_ID:             ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_STORAGE_BUCKET:         ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+          FIREBASE_SERVICE_ACCOUNT_BASE64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 }}
+          KEYWORDS:                        ${{ secrets.KEYWORDS }}
+          # FIREBASE_DATABASE_URL:         ${{ secrets.FIREBASE_DATABASE_URL }}
