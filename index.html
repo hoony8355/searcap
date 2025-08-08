@@ -1,202 +1,86 @@
 <!DOCTYPE html>
 <html lang="ko">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>네이버 광고 스크린샷 갤러리</title>
-    <style>
-      body {
-        font-family: "Noto Sans KR", sans-serif;
-        margin: 0;
-        padding: 1rem;
-        background: #fafafa;
-        color: #333;
-      }
-      h1 {
-        margin-bottom: 1rem;
-        font-size: 1.8rem;
-        color: #005bab;
-      }
-      details {
-        margin: 0.5rem 0;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        background: #fff;
-        padding: 0.5rem 1rem;
-      }
-      details > summary {
-        font-weight: 600;
-        cursor: pointer;
-        list-style: none;
-        outline: none;
-      }
-      details details {
-        margin-left: 1rem;
-        margin-top: 0.5rem;
-      }
-      .image-grid {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 1rem;
-        margin-top: 0.5rem;
-      }
-      .image-wrapper {
-        flex: 0 0 200px;
-        max-width: 200px;
-        text-align: center;
-      }
-      .image-wrapper img {
-        width: 100%;
-        border: 1px solid #ccc;
-        border-radius: 4px;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-      }
-      .image-wrapper .timestamp {
-        font-size: 0.75rem;
-        color: #666;
-        margin-top: 0.25rem;
-      }
-      /* Scroll bar styling */
-      ::-webkit-scrollbar {
-        width: 8px;
-      }
-      ::-webkit-scrollbar-track {
-        background: #f1f1f1;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #888;
-        border-radius: 4px;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #555;
-      }
-    </style>
-  </head>
-  <body>
-    <h1>네이버 광고 스크린샷 갤러리</h1>
-    <p>키워드별로 PC/모바일, 파워링크/가격비교(쇼핑정보) 스크린샷을 확인할 수 있습니다.</p>
-    <div id="gallery"></div>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>네이버 광고 스크린샷 갤러리</title>
+  <style>
+    body { font-family: 'Noto Sans KR', sans-serif; margin: 0; padding: 1rem; background: #fafafa; color: #333; }
+    h1 { margin-bottom: 1rem; }
+    details { margin-bottom: 0.5rem; }
+    summary { cursor: pointer; font-weight: bold; }
+    .section { margin-left: 1.5rem; }
+    .images { margin-left: 3rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .images img { max-width: 200px; border: 1px solid #ccc; border-radius: 4px; }
+    .caption { font-size: 0.8rem; color: #666; text-align: center; }
+  </style>
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+  <script>
+    // Firebase 설정
+    const firebaseConfig = {
+      apiKey: "AIzaSyDyT7U-wldhe_XB73_Fx2BbD0EhejrG8JA",
+      authDomain: "searcap.firebaseapp.com",
+      projectId: "searcap",
+      storageBucket: "searcap.firebasestorage.app",
+      messagingSenderId: "290217487279",
+      appId: "1:290217487279:web:95d4057be54210ab26dd5a",
+      measurementId: "G-XCWHH8EBTT"
+    };
+    // Firebase 초기화
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+  </script>
+</head>
+<body>
+  <h1>네이버 광고 스크린샷 갤러리</h1>
+  <div id="gallery">로딩 중...</div>
 
-    <!-- Firebase App (the core Firebase SDK) -->
-    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore-compat.js"></script>
-    <script>
-      // TODO: 여기에 실제 Firebase 설정을 입력하세요
-      const firebaseConfig = {
-        apiKey: "YOUR_API_KEY",
-        authDomain: "YOUR_AUTH_DOMAIN",
-        projectId: "YOUR_PROJECT_ID",
-        storageBucket: "YOUR_STORAGE_BUCKET",
-        messagingSenderId: "YOUR_SENDER_ID",
-        appId: "YOUR_APP_ID",
-      };
-      firebase.initializeApp(firebaseConfig);
-      const db = firebase.firestore();
-
-      /**
-       * 시간 정보를 한글 날짜·시간 문자열로 변환하는 함수
-       * @param {Date} date
-       */
-      function formatTimestamp(date) {
-        const yyyy = date.getFullYear();
-        const mm = String(date.getMonth() + 1).padStart(2, '0');
-        const dd = String(date.getDate()).padStart(2, '0');
-        const hh = String(date.getHours()).padStart(2, '0');
-        const min = String(date.getMinutes()).padStart(2, '0');
-        return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
-      }
-
-      /**
-       * Firestore에서 데이터를 불러와 갤러리를 렌더링합니다.
-       */
-      function loadGallery() {
-        db.collection('screenshots')
-          .orderBy('timestamp', 'desc')
-          .get()
-          .then((snapshot) => {
-            const items = snapshot.docs.map((doc) => {
-              const data = doc.data();
-              return {
-                keyword: data.keyword,
-                viewport: data.viewport,
-                section: data.section, // 'powerlink' 또는 'shopping'
-                timestamp: data.timestamp ? data.timestamp.toDate() : new Date(),
-                url: data.url,
-              };
-            });
-            renderGallery(items);
-          })
-          .catch((err) => {
-            console.error('Firestore 로드 오류:', err);
-          });
-      }
-
-      /**
-       * 갤러리 DOM을 생성합니다.
-       * @param {Array} data
-       */
-      function renderGallery(data) {
-        const container = document.getElementById('gallery');
-        container.innerHTML = '';
-        // 키워드→뷰포트→섹션으로 그룹핑
-        const grouped = {};
-        data.forEach((item) => {
-          if (!grouped[item.keyword]) grouped[item.keyword] = {};
-          if (!grouped[item.keyword][item.viewport]) grouped[item.keyword][item.viewport] = {};
-          if (!grouped[item.keyword][item.viewport][item.section]) grouped[item.keyword][item.viewport][item.section] = [];
-          grouped[item.keyword][item.viewport][item.section].push(item);
-        });
-        Object.keys(grouped).forEach((keyword) => {
-          const kwDetails = document.createElement('details');
-          const kwSummary = document.createElement('summary');
-          kwSummary.textContent = keyword;
-          kwDetails.appendChild(kwSummary);
-          Object.keys(grouped[keyword]).forEach((viewport) => {
-            const vpDetails = document.createElement('details');
-            const vpSummary = document.createElement('summary');
-            vpSummary.textContent = viewport === 'pc' ? 'PC' : '모바일';
-            vpDetails.appendChild(vpSummary);
-            Object.keys(grouped[keyword][viewport]).forEach((section) => {
-              const secDetails = document.createElement('details');
-              const secSummary = document.createElement('summary');
-              // 섹션 이름 한국어로 매핑
-              let secName = section;
-              if (section === 'powerlink') secName = '파워링크';
-              else if (section === 'shopping' || section === 'pricecompare') secName = '가격비교';
-              secSummary.textContent = secName;
-              secDetails.appendChild(secSummary);
-              // 이미지 그리드 생성
-              const grid = document.createElement('div');
-              grid.className = 'image-grid';
-              // 가장 최신이 위쪽에 오도록 정렬
-              grouped[keyword][viewport][section]
-                .sort((a, b) => b.timestamp - a.timestamp)
-                .forEach((item) => {
-                  const wrapper = document.createElement('div');
-                  wrapper.className = 'image-wrapper';
-                  const img = document.createElement('img');
-                  img.src = item.url;
-                  img.alt = `${item.keyword} ${item.viewport} ${item.section}`;
-                  const caption = document.createElement('div');
-                  caption.className = 'timestamp';
-                  caption.textContent = formatTimestamp(item.timestamp);
-                  wrapper.appendChild(img);
-                  wrapper.appendChild(caption);
-                  grid.appendChild(wrapper);
-                });
-              secDetails.appendChild(grid);
-              vpDetails.appendChild(secDetails);
-            });
-            kwDetails.appendChild(vpDetails);
-          });
-          container.appendChild(kwDetails);
-        });
-      }
-
-      // 페이지 로드 시 갤러리 불러오기
-      document.addEventListener('DOMContentLoaded', () => {
-        loadGallery();
+  <script>
+    async function loadGallery() {
+      const gallery = document.getElementById('gallery');
+      gallery.textContent = '';
+      const snapshot = await db.collection('screenshots').orderBy('timestamp', 'desc').get();
+      const data = {};
+      snapshot.forEach(doc => {
+        const { keyword, viewport, section, timestamp, url } = doc.data();
+        data[keyword] = data[keyword] || {};
+        data[keyword][viewport] = data[keyword][viewport] || {};
+        data[keyword][viewport][section] = data[keyword][viewport][section] || [];
+        data[keyword][viewport][section].push({ url, timestamp: timestamp.toDate() });
       });
-    </script>
-  </body>
+
+      for (const kw in data) {
+        const kDet = document.createElement('details'); kDet.open = true;
+        const kSum = document.createElement('summary'); kSum.textContent = kw;
+        kDet.appendChild(kSum);
+        for (const vp in data[kw]) {
+          const vDet = document.createElement('details'); vDet.className = 'section'; vDet.open = true;
+          const vSum = document.createElement('summary'); vSum.textContent = vp.toUpperCase();
+          vDet.appendChild(vSum);
+          for (const sec in data[kw][vp]) {
+            const sDet = document.createElement('details'); sDet.className = 'section';
+            const sSum = document.createElement('summary'); sSum.textContent = sec;
+            sDet.appendChild(sSum);
+            const imgDiv = document.createElement('div'); imgDiv.className = 'images';
+            data[kw][vp][sec].forEach(item => {
+              const box = document.createElement('div');
+              const img = document.createElement('img'); img.src = item.url;
+              const cap = document.createElement('div'); cap.className = 'caption';
+              cap.textContent = item.timestamp.toLocaleString();
+              box.appendChild(img); box.appendChild(cap);
+              imgDiv.appendChild(box);
+            });
+            sDet.appendChild(imgDiv);
+            vDet.appendChild(sDet);
+          }
+          kDet.appendChild(vDet);
+        }
+        gallery.appendChild(kDet);
+      }
+    }
+    loadGallery();
+  </script>
+</body>
 </html>
