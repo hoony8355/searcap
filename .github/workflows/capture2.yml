@@ -1,0 +1,58 @@
+name: capture2 (mobile-price)
+
+on:
+  workflow_dispatch:
+    inputs:
+      keyword:
+        description: '검색어 (예: 페이퍼팝)'
+        required: true
+        default: '페이퍼팝'
+      dsf:
+        description: 'deviceScaleFactor (1~6)'
+        required: false
+        default: '3'
+      dry_run:
+        description: '업로드 생략(로컬 아티팩트만)'
+        required: false
+        default: '0'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 한글 폰트 + puppeteer 런타임에 필요한 라이브러리 최소 세트
+      - name: Install deps for headless Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            fonts-noto-cjk libnss3 libxss1 libasound2 libxkbcommon0 libxshmfence1 \
+            libxcomposite1 libxdamage1 libxrandr2 libgbm1
+
+      - name: Install NPM deps
+        run: npm i puppeteer firebase-admin
+
+      - name: Run capture2.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT_BASE64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 }}
+          FIREBASE_PROJECT_ID:            ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_STORAGE_BUCKET:        ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+          FIREBASE_DATABASE_URL:          ${{ secrets.FIREBASE_DATABASE_URL }}
+          DEVICE_SCALE_FACTOR:            ${{ github.event.inputs.dsf }}
+          DRY_RUN:                        ${{ github.event.inputs.dry_run }}
+          CAP_PREFIX:                     "actions/${{ github.run_id }}"
+        run: |
+          node capture2.js --keyword "${{ github.event.inputs.keyword }}"
+
+      # 로컬 저장된 PNG들을 아티팩트로 받아보기 (DRY_RUN이든 아니든)
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures
+          path: captures/*.png
