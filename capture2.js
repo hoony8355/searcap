@@ -1,6 +1,6 @@
 // capture2.js
 // 목적: 모바일(네이버) 가격검색 섹션만 다중 방식으로 빠르게 캡처 & 업로드 테스트
-// 사용 예:
+// 실행 예:
 //   KEYWORDS="페이퍼팝" node capture2.js
 //   node capture2.js --keyword "페이퍼팝"
 //   node capture2.js --url "https://m.search.naver.com/search.naver?query=..." --dsf 3
@@ -13,7 +13,7 @@
 // 선택 환경변수:
 //   DEVICE_SCALE_FACTOR=3
 //   CAP_PREFIX="devtest/"   (업로드 경로 prefix)
-//   DRY_RUN=1               (로컬 저장만, 업로드/DB 기록 생략)
+//   DRY_RUN=1               (업로드/DB 기록 생략하고 로컬 저장만)
 
 'use strict';
 
@@ -68,7 +68,7 @@ async function persistImage(buf, { keyword, variant, ts }) {
   const baseName = `pricecompare-mobile_${slug(keyword)}_${ts}_${variant}.png`;
   const gcsPath = CAP_PREFIX ? `${CAP_PREFIX}/${baseName}` : baseName;
 
-  // 로컬도 항상 저장(디버깅 편의)
+  // 로컬 저장(항상)
   const localPath = path.join(SAVE_DIR, baseName);
   try { fs.writeFileSync(localPath, buf); } catch {}
 
@@ -77,6 +77,8 @@ async function persistImage(buf, { keyword, variant, ts }) {
   }
 
   await bucket.file(gcsPath).save(buf, { contentType: 'image/png', resumable: false });
+  // 필요 시 공개
+  // await bucket.file(gcsPath).makePublic();
   const publicUrl = `https://storage.googleapis.com/${bucket.name}/${gcsPath}`;
   await db.collection('screenshots').add({
     keyword,
