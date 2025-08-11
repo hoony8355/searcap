@@ -241,9 +241,20 @@ async function resolvePriceSearchSelector(page) {
     // Helper: generate a simple unique selector for an element
     function getUniqueSelector(element) {
       if (!element) return null;
-      if (element.id) return `#${CSS.escape(element.id)}`;
+      // If the element is too narrow (common when selecting vertical headings),
+      // traverse up the DOM tree until we find a parent with reasonable width.
+      let el = element;
+      try {
+        while (el && el.getBoundingClientRect && el.getBoundingClientRect().width < 150 && el.parentElement) {
+          el = el.parentElement;
+        }
+      } catch (e) {
+        // ignore errors and just use current element
+      }
+      // Use id if available on the chosen element
+      if (el.id) return `#${CSS.escape(el.id)}`;
       const parts = [];
-      let current = element;
+      let current = el;
       for (let i = 0; current && i < 5; i++) {
         let selector = current.nodeName.toLowerCase();
         if (current.classList && current.classList.length) {
@@ -346,15 +357,26 @@ async function getClipForSection(page, selector, pad = 0) {
   }, selector);
   if (!rect) throw new Error('rect is null');
 
-  const clip = {
-    x: Math.max(0, rect.x - pad),
-    y: Math.max(0, rect.y - pad),
-    width: Math.max(1, rect.width + pad * 2),
-    height: Math.max(1, rect.height + pad * 2),
-  };
+  // Compute initial clip dimensions
+  let clipWidth = rect.width + pad * 2;
+  let clipHeight = rect.height + pad * 2;
+  let clipX = Math.max(0, rect.x - pad);
+  let clipY = Math.max(0, rect.y - pad);
+  // If the detected element is extremely narrow (e.g., only the vertical heading),
+  // expand the clip width to the full document width from the left position. This
+  // ensures we capture the content to the right of the heading.
+  if (clipWidth < 180) {
+    clipWidth = rect.docWidth - clipX;
+  }
   // Clamp within document dimensions
-  clip.width = Math.min(clip.width, rect.docWidth - clip.x);
-  clip.height = Math.min(clip.height, rect.docHeight - clip.y);
+  clipWidth = Math.min(clipWidth, rect.docWidth - clipX);
+  clipHeight = Math.min(clipHeight, rect.docHeight - clipY);
+  const clip = {
+    x: clipX,
+    y: clipY,
+    width: Math.max(1, clipWidth),
+    height: Math.max(1, clipHeight),
+  };
   return clip;
 }
 
@@ -463,10 +485,14 @@ async function captureIsolatedDom(page, selector, keyword, ts) {
     await iso.evaluate(() => document.fonts && document.fonts.ready);
   } catch {}
   await sleep(200);
-  const rect = await iso.evaluate(() => {
+  let rect = await iso.evaluate(() => {
     const b = document.body.getBoundingClientRect();
     return { width: Math.ceil(b.width), height: Math.ceil(b.height) };
   });
+  // If the isolated width is too narrow, expand it to a reasonable default (e.g., 390px)
+  if (rect.width < 180) {
+    rect.width = 390;
+  }
   await iso.setViewport({ width: rect.width, height: rect.height, deviceScaleFactor: dsf });
   const buffer = await iso.screenshot({ clip: { x: 0, y: 0, width: rect.width, height: rect.height }, type: 'png' });
   await iso.close();
