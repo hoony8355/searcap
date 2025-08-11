@@ -1,33 +1,38 @@
-name: capture2 (mobile-price) 
+name: capture2 (mobile-price)
 
 on:
-  workflow_dispatch:  # 수동 트리거
+  workflow_dispatch:
     inputs:
       keyword:
         description: '검색어 (예: 페이퍼팝)'
         required: true
         default: '페이퍼팝'
+      url:
+        description: '직접 URL (입력이 있으면 keyword 무시)'
+        required: false
+        default: ''
       dsf:
         description: 'deviceScaleFactor (1~6)'
         required: false
         default: '3'
       dry_run:
-        description: '업로드 생략(로컬만 저장)'
+        description: '1=업로드 생략(로컬 저장만)'
         required: false
         default: '0'
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Node
-      - uses: actions/setup-node@v4
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # headless Chrome 의존 라이브러리 설치 (Ubuntu 24.04/22.04 모두 지원)
       - name: Install deps for headless Chrome
         shell: bash
         run: |
@@ -36,13 +41,13 @@ jobs:
             fonts-noto-cjk fonts-noto-color-emoji \
             libnss3 libxss1 libxkbcommon0 libxshmfence1 \
             libxcomposite1 libxdamage1 libxrandr2 libgbm1
-          # noble(24.04) 환경에서는 libasound2 대신 libasound2t64 설치
+          # Ubuntu 24.04에서는 libasound2가 가상패키지 → t64로 대체
           sudo apt-get install -y libasound2 || sudo apt-get install -y libasound2t64
 
-      - name: Install NPM dependencies
-        run: npm install puppeteer firebase-admin
+      - name: Install npm packages
+        run: npm install --no-audit --no-fund puppeteer firebase-admin
 
-      - name: Run capture script
+      - name: Run capture2.js
         env:
           FIREBASE_SERVICE_ACCOUNT_BASE64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 }}
           FIREBASE_PROJECT_ID:            ${{ secrets.FIREBASE_PROJECT_ID }}
@@ -50,13 +55,18 @@ jobs:
           FIREBASE_DATABASE_URL:          ${{ secrets.FIREBASE_DATABASE_URL }}
           DEVICE_SCALE_FACTOR:            ${{ github.event.inputs.dsf }}
           DRY_RUN:                        ${{ github.event.inputs.dry_run }}
-          CAP_PREFIX:                     "actions/${{ github.run_id }}"
+          CAP_PREFIX:                     actions/${{ github.run_id }}
         run: |
-          node capture2.js --keyword "${{ github.event.inputs.keyword }}"
+          if [ -n "${{ github.event.inputs.url }}" ]; then
+            node capture2.js --url "${{ github.event.inputs.url }}"
+          else
+            node capture2.js --keyword "${{ github.event.inputs.keyword }}"
+          fi
 
-      # 캡처 파일을 아티팩트로 업로드 (DRY_RUN 여부와 상관없이 실행)
       - name: Upload capture artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: captures
           path: captures/*.png
+          if-no-files-found: warn
