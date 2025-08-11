@@ -1,7 +1,7 @@
 name: capture2 (mobile-price)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # 수동 트리거
     inputs:
       keyword:
         description: '검색어 (예: 페이퍼팝)'
@@ -12,7 +12,7 @@ on:
         required: false
         default: '3'
       dry_run:
-        description: '업로드 생략(로컬 아티팩트만)'
+        description: '업로드 생략(로컬만 저장)'
         required: false
         default: '0'
 
@@ -23,27 +23,26 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # 한글 폰트 + headless Chrome 필수 라이브러리
+      # headless Chrome 의존 라이브러리 설치 (Ubuntu 24.04/22.04 모두 지원)
       - name: Install deps for headless Chrome
         shell: bash
         run: |
-          set -eux
           sudo apt-get update
           sudo apt-get install -y \
             fonts-noto-cjk fonts-noto-color-emoji \
             libnss3 libxss1 libxkbcommon0 libxshmfence1 \
             libxcomposite1 libxdamage1 libxrandr2 libgbm1
-          # Ubuntu 24.04(noble)은 libasound2t64로 변경됨 → 폴백 설치
+          # noble(24.04) 환경에서는 libasound2 대신 libasound2t64 설치
           sudo apt-get install -y libasound2 || sudo apt-get install -y libasound2t64
 
-      - name: Install NPM deps
-        run: npm i puppeteer firebase-admin
+      - name: Install NPM dependencies
+        run: npm install puppeteer firebase-admin
 
-      - name: Run capture2.js
+      - name: Run capture script
         env:
           FIREBASE_SERVICE_ACCOUNT_BASE64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 }}
           FIREBASE_PROJECT_ID:            ${{ secrets.FIREBASE_PROJECT_ID }}
@@ -55,8 +54,8 @@ jobs:
         run: |
           node capture2.js --keyword "${{ github.event.inputs.keyword }}"
 
-      # 로컬 저장된 PNG들을 아티팩트로 수집
-      - name: Upload artifacts
+      # 캡처 파일을 아티팩트로 업로드 (DRY_RUN 여부와 상관없이 실행)
+      - name: Upload capture artifacts
         uses: actions/upload-artifact@v4
         with:
           name: captures
