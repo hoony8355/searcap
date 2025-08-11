@@ -1,34 +1,83 @@
-- name: Run capture2.js
-  env:
-    FIREBASE_SERVICE_ACCOUNT_BASE64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 }}
-    FIREBASE_PROJECT_ID:            ${{ secrets.FIREBASE_PROJECT_ID }}
-    FIREBASE_STORAGE_BUCKET:        ${{ secrets.FIREBASE_STORAGE_BUCKET }}
-    FIREBASE_DATABASE_URL:          ${{ secrets.FIREBASE_DATABASE_URL }}
-    DEVICE_SCALE_FACTOR:            ${{ github.event.inputs.dsf }}
-    DRY_RUN:                        ${{ github.event.inputs.dry_run }}
-    CAP_PREFIX:                     actions/${{ github.run_id }}
-  run: |
-    node -v
-    pwd
-    ls -al
-    if [ -n "${{ github.event.inputs.url }}" ]; then
-      node capture2.js --url "${{ github.event.inputs.url }}"
-    else
-      node capture2.js --keyword "${{ github.event.inputs.keyword }}"
-    fi
+name: Capture Naver Price (mobile)
 
-- name: List capture folder (debug)
-  if: always()
-  run: |
-    echo "== repo root =="
-    ls -al
-    echo "== captures dir =="
-    ls -al captures || true
+on:
+  workflow_dispatch:
+    inputs:
+      keyword:
+        description: '검색어 (예: 페이퍼팝) — url이 비어있을 때 사용'
+        required: false
+        type: string
+      url:
+        description: '모바일 네이버 검색 URL (선택)'
+        required: false
+        type: string
+      dsf:
+        description: 'deviceScaleFactor (1~6)'
+        required: false
+        default: '3'
+        type: choice
+        options: ['1','2','3','4','5','6']
+      dry_run:
+        description: 'Firebase 업로드 생략(1=생략, 0=업로드)'
+        required: false
+        default: '1'
+        type: choice
+        options: ['0','1']
 
-- name: Upload capture artifacts
-  if: always()
-  uses: actions/upload-artifact@v4
-  with:
-    name: captures
-    path: "**/captures/*.png"
-    if-no-files-found: warn
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    env:
+      FIREBASE_SERVICE_ACCOUNT_BASE64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 }}
+      FIREBASE_PROJECT_ID:            ${{ secrets.FIREBASE_PROJECT_ID }}
+      FIREBASE_STORAGE_BUCKET:        ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+      FIREBASE_DATABASE_URL:          ${{ secrets.FIREBASE_DATABASE_URL }}
+      DEVICE_SCALE_FACTOR:            ${{ inputs.dsf }}
+      DRY_RUN:                        ${{ inputs.dry_run }}
+      CAP_PREFIX:                     actions/${{ github.run_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install system deps (fonts/libs for Chromium)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            fonts-noto-cjk \
+            libnss3 libgbm1 libxss1 libxshmfence1 \
+            libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxdamage1 libxrandr2 \
+            libgtk-3-0 libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libdrm2 libxext6
+          fc-list | head -n 5 || true
+
+      - name: Install npm deps
+        run: |
+          npm init -y >/dev/null 2>&1 || true
+          npm i puppeteer firebase-admin
+
+      - name: Run capture2.js
+        run: |
+          node -v
+          if [ -n "${{ inputs.url }}" ]; then
+            node capture2.js --dsf "${{ inputs.dsf }}" --url "${{ inputs.url }}"
+          else
+            node capture2.js --dsf "${{ inputs.dsf }}" --keyword "${{ inputs.keyword }}"
+          fi
+
+      - name: List captures (debug)
+        if: always()
+        run: |
+          echo "== repo root ==" && ls -al
+          echo "== captures ==" && ls -al captures || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-${{ github.run_id }}
+          path: captures/**
+          if-no-files-found: warn
