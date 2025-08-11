@@ -1,4 +1,4 @@
-name: capture2 (mobile-price)
+name: capture2 (mobile-price) 
 
 on:
   workflow_dispatch:  # 수동 트리거
