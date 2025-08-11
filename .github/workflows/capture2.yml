@@ -1,72 +1,34 @@
-name: capture2 (mobile-price)
+- name: Run capture2.js
+  env:
+    FIREBASE_SERVICE_ACCOUNT_BASE64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 }}
+    FIREBASE_PROJECT_ID:            ${{ secrets.FIREBASE_PROJECT_ID }}
+    FIREBASE_STORAGE_BUCKET:        ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+    FIREBASE_DATABASE_URL:          ${{ secrets.FIREBASE_DATABASE_URL }}
+    DEVICE_SCALE_FACTOR:            ${{ github.event.inputs.dsf }}
+    DRY_RUN:                        ${{ github.event.inputs.dry_run }}
+    CAP_PREFIX:                     actions/${{ github.run_id }}
+  run: |
+    node -v
+    pwd
+    ls -al
+    if [ -n "${{ github.event.inputs.url }}" ]; then
+      node capture2.js --url "${{ github.event.inputs.url }}"
+    else
+      node capture2.js --keyword "${{ github.event.inputs.keyword }}"
+    fi
 
-on:
-  workflow_dispatch:
-    inputs:
-      keyword:
-        description: '검색어 (예: 페이퍼팝)'
-        required: true
-        default: '페이퍼팝'
-      url:
-        description: '직접 URL (입력이 있으면 keyword 무시)'
-        required: false
-        default: ''
-      dsf:
-        description: 'deviceScaleFactor (1~6)'
-        required: false
-        default: '3'
-      dry_run:
-        description: '1=업로드 생략(로컬 저장만)'
-        required: false
-        default: '0'
+- name: List capture folder (debug)
+  if: always()
+  run: |
+    echo "== repo root =="
+    ls -al
+    echo "== captures dir =="
+    ls -al captures || true
 
-jobs:
-  run:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install deps for headless Chrome
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            fonts-noto-cjk fonts-noto-color-emoji \
-            libnss3 libxss1 libxkbcommon0 libxshmfence1 \
-            libxcomposite1 libxdamage1 libxrandr2 libgbm1
-          # Ubuntu 24.04에서는 libasound2가 가상패키지 → t64로 대체
-          sudo apt-get install -y libasound2 || sudo apt-get install -y libasound2t64
-
-      - name: Install npm packages
-        run: npm install --no-audit --no-fund puppeteer firebase-admin
-
-      - name: Run capture2.js
-        env:
-          FIREBASE_SERVICE_ACCOUNT_BASE64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 }}
-          FIREBASE_PROJECT_ID:            ${{ secrets.FIREBASE_PROJECT_ID }}
-          FIREBASE_STORAGE_BUCKET:        ${{ secrets.FIREBASE_STORAGE_BUCKET }}
-          FIREBASE_DATABASE_URL:          ${{ secrets.FIREBASE_DATABASE_URL }}
-          DEVICE_SCALE_FACTOR:            ${{ github.event.inputs.dsf }}
-          DRY_RUN:                        ${{ github.event.inputs.dry_run }}
-          CAP_PREFIX:                     actions/${{ github.run_id }}
-        run: |
-          if [ -n "${{ github.event.inputs.url }}" ]; then
-            node capture2.js --url "${{ github.event.inputs.url }}"
-          else
-            node capture2.js --keyword "${{ github.event.inputs.keyword }}"
-          fi
-
-      - name: Upload capture artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: captures
-          path: captures/*.png
-          if-no-files-found: warn
+- name: Upload capture artifacts
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: captures
+    path: "**/captures/*.png"
+    if-no-files-found: warn
