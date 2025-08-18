@@ -1,12 +1,22 @@
 // capture.js
-// Puppeteer + Firebase를 이용한 네이버 검색 스크린샷
-// - 모바일 '가격비교/가격검색' 관련 기능 전부 제거
-// - PC '가격비교(pricecompare-pc)'는 유지
+// Puppeteer + Firebase를 이용한 네이버 검색 스크린샷 (경량/저용량 고정 설정 버전)
 
 const puppeteer = require('puppeteer');
 const admin = require('firebase-admin');
 
-// ---- Firebase Admin SDK 초기화 ----
+// ---------- 압축/형식/배율: 고정값 ----------
+const IMG_FORMAT = 'jpeg';     // 'jpeg' 고정
+const IMG_QUALITY = 65;        // 1~100
+const DEVICE_SCALE_FACTOR = 1.5;
+const RESIZE_MAX_WIDTH = 1600; // fullpage 가로폭이 이 값보다 크면 축소
+const CONTENT_TYPE = 'image/jpeg';
+const EXT = 'jpg';
+
+// sharp는 선택사항(있으면 후처리)
+let sharp = null;
+try { sharp = require('sharp'); } catch { /* optional */ }
+
+// ---------- Firebase Admin SDK ----------
 const serviceAccount = JSON.parse(
   Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8')
 );
@@ -19,45 +29,67 @@ admin.initializeApp({
 const bucket = admin.storage().bucket();
 const db = admin.firestore();
 
-// ---- 유틸: 딜레이 ----
+// ---------- 유틸 ----------
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
-// ---- 섹션 XPath 정의 ----
-//  ⛔ 모바일 pricecompare-* 제외
+async function compressBuffer(buf, { isFullPage = false } = {}) {
+  // sharp가 있으면: 리사이즈(옵션) + 재인코딩
+  if (sharp) {
+    let img = sharp(buf, { failOn: false });
+    if (isFullPage && RESIZE_MAX_WIDTH > 0) {
+      const meta = await img.metadata();
+      if (meta.width && meta.width > RESIZE_MAX_WIDTH) {
+        img = img.resize({ width: RESIZE_MAX_WIDTH, withoutEnlargement: true });
+      }
+    }
+    return await img.jpeg({ quality: IMG_QUALITY, mozjpeg: true }).toBuffer();
+  }
+  // sharp가 없으면: Puppeteer가 만든 포맷 그대로 사용
+  return buf;
+}
+
+async function screenshotElemCompressed(elem) {
+  // Puppeteer도 elem 수준에서 type/quality 지원
+  const raw = await elem.screenshot({
+    type: 'jpeg',
+    quality: IMG_QUALITY,
+  });
+  return await compressBuffer(raw, { isFullPage: false });
+}
+
+async function screenshotPageCompressed(page, { fullPage = false } = {}) {
+  const raw = await page.screenshot({
+    fullPage,
+    type: 'jpeg',
+    quality: IMG_QUALITY,
+  });
+  return await compressBuffer(raw, { isFullPage: fullPage });
+}
+
+// ---------- 섹션 XPATH ----------
 const SECTION_XPATHS = {
   'powerlink-pc':     "//*[starts-with(@id, 'pcPowerLink_')]/div/div",
   'pricecompare-pc':  "//*[@id='shp_gui_root']/section/div[2]",
   'powerlink-mobile': "//*[starts-with(@id,'mobilePowerLink_')]/section",
 };
 
-// ---- XPath로 요소 가져오기 ----
 async function getElementByXPath(page, xpath, timeout = 5000) {
-  try {
-    await page.waitForXPath(xpath, { timeout });
-  } catch {
-    return null;
-  }
+  try { await page.waitForXPath(xpath, { timeout }); } catch { return null; }
   const [elem] = await page.$x(xpath);
   return elem || null;
 }
 
-// ---- 모바일 페이지 준비: 헤딩 대기 + lazy-load 트리거 ----
-//  (가격비교 키워드 제거)
 async function prepareMobilePage(page) {
   try {
-    await page.waitForXPath(
-      "//h2[contains(normalize-space(), '관련 광고')]",
-      { timeout: 10000 }
-    );
+    await page.waitForXPath("//h2[contains(normalize-space(), '관련 광고')]", { timeout: 10000 });
   } catch {}
   await page.evaluate(async () => {
     window.scrollTo(0, document.body.scrollHeight);
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 1500));
     window.scrollTo(0, 0);
   });
 }
 
-// ---- 키워드+뷰포트별 캡처 ----
 async function captureKeyword(keyword, viewport) {
   const browser = await puppeteer.launch({
     headless: true,
@@ -72,7 +104,7 @@ async function captureKeyword(keyword, viewport) {
     defaultViewport: {
       width: viewport.width,
       height: viewport.height,
-      deviceScaleFactor: 3,
+      deviceScaleFactor: DEVICE_SCALE_FACTOR, // 고정: 1.5
       isMobile: viewport.label === 'mobile',
       hasTouch: viewport.label === 'mobile',
     },
@@ -102,21 +134,13 @@ async function captureKeyword(keyword, viewport) {
 
   if (viewport.label === 'mobile') {
     await prepareMobilePage(page);
-    await delay(1200);
+    await delay(1000);
   } else {
-    await delay(600);
+    await delay(500);
   }
 
   const ts = new Date().toISOString().replace(/[:.]/g, '');
-
-  // 🔎 일반 섹션 캡처 루프
-  //  - 모바일 pricecompare-* 없음
-  //  - PC pricecompare-* 유지
-  const sectionKeys = [
-    'powerlink-pc',
-    'pricecompare-pc',
-    'powerlink-mobile',
-  ];
+  const sectionKeys = ['powerlink-pc', 'pricecompare-pc', 'powerlink-mobile'];
 
   for (const key of sectionKeys) {
     if (viewport.label === 'pc' && key.includes('mobile')) continue;
@@ -132,13 +156,13 @@ async function captureKeyword(keyword, viewport) {
         continue;
       }
 
-      // 내부 앵커 대기(옵션)
       try { await page.waitForXPath(`${xpath}//a`, { timeout: 4000 }); } catch {}
 
-      const buf = await elem.screenshot(); // Buffer 반환
-      const filePath = `${key}_${viewport.label}_${keyword}_${ts}.png`;
-      await bucket.file(filePath).save(buf, { contentType: 'image/png' });
+      const buf = await screenshotElemCompressed(elem);
+      const filePath = `${key}_${viewport.label}_${keyword}_${ts}.${EXT}`;
+      await bucket.file(filePath).save(buf, { contentType: CONTENT_TYPE, resumable: false });
       const publicUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+
       await db.collection('screenshots').add({
         keyword,
         viewport: viewport.label,
@@ -146,6 +170,9 @@ async function captureKeyword(keyword, viewport) {
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
         filePath,
         url: publicUrl,
+        format: EXT,
+        quality: IMG_QUALITY,
+        dpr: DEVICE_SCALE_FACTOR,
       });
       console.log(`✅ 섹션 캡처: ${key} → ${publicUrl}`);
     } catch (err) {
@@ -153,22 +180,20 @@ async function captureKeyword(keyword, viewport) {
     }
   }
 
-  // 🧾 전체 페이지 캡처
+  // 전체 페이지 캡처(압축 + 리사이즈)
   try {
     if (viewport.label === 'mobile') {
       await page.evaluate(async () => {
         const imgs = Array.from(document.images);
-        await Promise.all(
-          imgs.map(img =>
-            img.complete ? Promise.resolve() : new Promise(r => { img.onload = r; img.onerror = r; })
-          )
-        );
+        await Promise.all(imgs.map(img => img.complete ? 1 : new Promise(r => { img.onload = r; img.onerror = r; })));
       });
     }
-    const fullBuf = await page.screenshot({ fullPage: true });
-    const fullPath = `fullpage_${viewport.label}_${keyword}_${ts}.png`;
-    await bucket.file(fullPath).save(fullBuf, { contentType: 'image/png' });
+
+    const fullBuf = await screenshotPageCompressed(page, { fullPage: true });
+    const fullPath = `fullpage_${viewport.label}_${keyword}_${ts}.${EXT}`;
+    await bucket.file(fullPath).save(fullBuf, { contentType: CONTENT_TYPE, resumable: false });
     const fullUrl = `https://storage.googleapis.com/${bucket.name}/${fullPath}`;
+
     await db.collection('screenshots').add({
       keyword,
       viewport: viewport.label,
@@ -176,6 +201,10 @@ async function captureKeyword(keyword, viewport) {
       timestamp: admin.firestore.FieldValue.serverTimestamp(),
       filePath: fullPath,
       url: fullUrl,
+      format: EXT,
+      quality: IMG_QUALITY,
+      dpr: DEVICE_SCALE_FACTOR,
+      resizedWidth: RESIZE_MAX_WIDTH || null,
     });
     console.log(`🧾 전체 페이지 캡처 완료: ${fullUrl}`);
   } catch (err) {
@@ -185,8 +214,9 @@ async function captureKeyword(keyword, viewport) {
   await browser.close();
 }
 
-// ---- Entry point ----
+// ---------- Entry ----------
 (async () => {
+  // 키워드는 기존과 동일하게 환경변수 KEYWORDS 사용(여긴 필요시 하드코딩 가능)
   const keywords = (process.env.KEYWORDS || '')
     .split(',')
     .map(s => s.trim())
